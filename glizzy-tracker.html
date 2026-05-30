@@ -459,35 +459,17 @@ async function submitSmart() {
   document.getElementById('smart-btn').textContent = '...';
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(SHEETS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 300,
-        messages: [{
-          role: 'user',
-          content: `Parse this transaction description into JSON. Return ONLY valid JSON, no markdown.
-
-Input: "${text}"
-
-Today's date: ${new Date().toLocaleDateString('en-US')}
-
-Return format:
-{"date":"MM/DD/YYYY","description":"clean description","amount":123.45,"method":"Other","category":"Income - Other","isIncome":true}
-
-Rules:
-- If money received/income: positive amount, isIncome: true, category starts with "Income - "
-- If money spent/expense: negative amount, isIncome: false
-- Pick best category from: DoorDash, Dunkin/Coffee, Fuel, Groceries/House, Online Orders, Take-Out/Entertainment, Clothes, Health/Medical, Subscriptions, Electricity, Gas Utility, Water/Garbage, Internet, Phone, Trading, Mortgage, Rent, Transfer/Other, Income-VA, Income-Military, Income-Tenants, Income-Other, Other
-- method: Debit Card, Credit Card, Transfer, Cash, or Other`
-        }]
+        action: 'parseText',
+        text: text,
+        today: new Date().toLocaleDateString('en-US')
       })
     });
     const data = await resp.json();
-    const raw = data.content?.find(b => b.type === 'text')?.text || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const parsed = data.data || {};
     const txn = { ...parsed, id: Date.now() + Math.random(), manual: true };
     state.transactions = [...(state.transactions || []), txn];
     saveLocal();
@@ -511,35 +493,18 @@ async function handleFiles(files) {
     try {
       const b64 = await toBase64(file);
       setStatus('AI extracting transactions...', 'load');
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch(SHEETS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: file.type || 'image/png', data: b64 } },
-              { type: 'text', text: `Extract ALL transactions from this bank or credit card screenshot. Return ONLY valid JSON, no markdown, nothing else.
-
-{"transactions":[{"date":"MM/DD/YYYY","description":"clean merchant name","amount":-123.45,"method":"Debit Card","isCC":false}]}
-
-Rules:
-- Negative = money out (debits, charges, payments)
-- Positive = money in (deposits, credits, income)
-- isCC: true if payment method is credit card, false otherwise
-- Clean merchant names: remove store numbers, city codes, confirmation numbers
-- method: exactly "Debit Card", "Credit Card", "Transfer", or "Other"
-- Include every single transaction visible` }
-            ]
-          }]
+          action: 'parseImage',
+          mediaType: file.type || 'image/png',
+          imageData: b64
         })
       });
       const data = await resp.json();
-      const text = data.content?.find(b => b.type === 'text')?.text || '';
-      const clean = text.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(clean);
+      const text = data.data ? JSON.stringify(data.data) : '';
+      const parsed = data.data || { transactions: [] };
       const newTxns = (parsed.transactions || []).map(t => ({
         ...t,
         category: guessCategory(t.description),
